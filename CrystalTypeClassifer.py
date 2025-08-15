@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.model_selection import train_test_split, GridSearchCV, cross_val_score
 from sklearn.metrics import (confusion_matrix, classification_report,
                              f1_score, precision_score, recall_score, accuracy_score,
                              roc_auc_score, ConfusionMatrixDisplay, roc_curve, auc)
@@ -15,18 +15,12 @@ import joblib
 import time
 import matplotlib as mpl
 import copy
+from scipy import interp
 
 
 class CrystalTypeClassifier:
     """
     A machine learning pipeline for classifying crystal types based on chemical ratios.
-
-    This class encapsulates the entire workflow including:
-    - Data loading and preprocessing
-    - Feature engineering
-    - Model training with hyperparameter optimization
-    - Model evaluation and visualization
-    - Result saving and reporting
 
     Attributes:
         output_dir (str): Directory to save all outputs
@@ -38,7 +32,7 @@ class CrystalTypeClassifier:
         poly: Fitted PolynomialFeatures transformer
     """
 
-    def __init__(self, data_path='data_20.csv', output_dir="random_forest_gridsearch", random_state=42):
+    def __init__(self, data_path='data_20.csv', output_dir="data_20", random_state=42):
         """
         Initialize the classifier with configuration parameters.
 
@@ -61,10 +55,20 @@ class CrystalTypeClassifier:
 
         # Load and prepare data
         self.data = pd.read_csv(data_path)
+        print(f"Loaded dataset with {len(self.data)} samples and {self.data.shape[1] - 1} features")
         self._prepare_data()
+
+        # Address class imbalance concerns
+        class_counts = self.data['Crystal_Type'].value_counts()
+        print("\nClass distribution:")
+        for crystal_type, count in class_counts.items():
+            print(f"Class {crystal_type}: {count} samples ({count / len(self.data):.1%})")
 
     def _prepare_data(self):
         """Load and split data into training and testing sets."""
+        print("Using features: 'Na:Bi' (Sodium-to-Bismuth ratio), 'F:Bi' (Fluorine-to-Bismuth ratio)")
+        print("Predicting target: 'Crystal_Type' (0=Others, 1=NaBiF4, 2=BiF3)")
+
         X = self.data[['Na:Bi', 'F:Bi']]
         y = self.data['Crystal_Type']
 
@@ -79,6 +83,8 @@ class CrystalTypeClassifier:
         self.y_train = self.y_train.reset_index(drop=True)
         self.y_test = self.y_test.reset_index(drop=True)
 
+        print(f"Train size: {len(self.X_train)}, Test size: {len(self.X_test)}")
+
     def _add_features(self, df):
         """
         Engineer new features from base chemical ratios.
@@ -90,10 +96,12 @@ class CrystalTypeClassifier:
             pd.DataFrame: Dataframe with additional engineered features
         """
         df = df.copy()
-        df['NaF_Ratio'] = df['Na:Bi'] / (df['F:Bi'] + 1e-6)  # Avoid division by zero
-        df['NaF_Sum'] = df['Na:Bi'] + df['F:Bi']
-        df['NaF_Diff'] = df['Na:Bi'] - df['F:Bi']
-        df['NaF_GeometricMean'] = np.sqrt(df['Na:Bi'] * df['F:Bi'])
+        df['Na:Bi/F:Bi'] = df['Na:Bi'] / (df['F:Bi'] + 1e-6)  # Avoid division by zero
+        df['Na:Bi+F:Bi'] = df['Na:Bi'] + df['F:Bi']
+        df['Na:Bi-F:Bi'] = df['Na:Bi'] - df['F:Bi']
+        df['GeometricMean'] = np.sqrt(df['Na:Bi'] * df['F:Bi'])
+        #df['sqrt_Na:Bi'] = np.sqrt(df['Na:Bi'])
+        #df['sqrt_F:Bi'] = np.sqrt(df['F:Bi'])
         return df
 
     def perform_feature_engineering(self, poly_degree=3):
@@ -103,7 +111,8 @@ class CrystalTypeClassifier:
         Args:
             poly_degree (int): Degree for polynomial feature expansion
         """
-        print("Performing feature engineering...")
+        print("\nPerforming feature engineering...")
+        print(f"Adding polynomial features (degree={poly_degree})")
 
         # Add basic engineered features
         self.X_train = self._add_features(self.X_train)
@@ -163,6 +172,7 @@ class CrystalTypeClassifier:
             Optimized RandomForest classifier
         """
         print("\nStarting GridSearchCV hyperparameter optimization...")
+        print(f"Using {cv}-fold cross-validation")
 
         # Default parameter grid if none provided
         if param_grid is None:
@@ -200,6 +210,7 @@ class CrystalTypeClassifier:
         print(f"\nBest parameters: {best_params}")
 
         self.best_model = grid_search.best_estimator_
+
         return self.best_model
 
     def evaluate_model(self, set_name=""):
@@ -226,6 +237,16 @@ class CrystalTypeClassifier:
             results[f"{prefix}{data_type} F1 Macro"] = f1_score(y, y_pred, average='macro')
             results[f"{prefix}{data_type} F1 Weighted"] = f1_score(y, y_pred, average='weighted')
 
+            # Class-specific metrics
+            for class_id in [0, 1, 2]:
+                class_name = ['Others', 'NaBiF4', 'BiF3'][class_id]
+                results[f"{prefix}{data_type} Precision ({class_name})"] = precision_score(
+                    y, y_pred, labels=[class_id], average=None)[0]
+                results[f"{prefix}{data_type} Recall ({class_name})"] = recall_score(
+                    y, y_pred, labels=[class_id], average=None)[0]
+                results[f"{prefix}{data_type} F1 ({class_name})"] = f1_score(
+                    y, y_pred, labels=[class_id], average=None)[0]
+
             if len(np.unique(y)) > 1:
                 results[f"{prefix}{data_type} ROC AUC"] = roc_auc_score(
                     y, y_proba, multi_class='ovo', average='macro'
@@ -242,7 +263,7 @@ class CrystalTypeClassifier:
         importance = self.best_model.feature_importances_
         sorted_idx = np.argsort(importance)[::-1]
 
-        plt.figure(figsize=(12/2.54, 6/2.54))
+        plt.figure(figsize=(12 / 2.54, 6 / 2.54))
         sns.barplot(x=importance[sorted_idx], y=self.X_train.columns[sorted_idx], palette='viridis')
         plt.title('')
         plt.xlabel('Importance Score')
@@ -260,24 +281,28 @@ class CrystalTypeClassifier:
 
     def plot_decision_boundary(self, filename="decision_boundary.png"):
         """
-        Visualize the decision boundary of the classifier.
+        Visualize the decision boundary of the classifier with smooth transitions.
 
         Args:
             filename (str): Output filename for the plot
         """
-        plt.figure(figsize=(8/2.54, 6/2.54))
+        # Create figure with proper size
+        plt.figure(figsize=(3.15, 2.36), dpi=600)
 
-        # Create grid in original feature space
-        na_min, na_max = self.data['Na:Bi'].min() * 0.9, self.data['Na:Bi'].max() * 1.1
+        # Create symmetric grid
+        na_min, na_max = self.data['Na:Bi'].min() * 0.1, self.data['Na:Bi'].max() * 1.1
         f_min, f_max = self.data['F:Bi'].min() * 0.1, self.data['F:Bi'].max() * 1.1
 
+        # Create logarithmic grid
         na_range = np.logspace(np.log10(na_min), np.log10(na_max), 500)
         f_range = np.logspace(np.log10(f_min), np.log10(f_max), 500)
 
-        grid = np.array(np.meshgrid(na_range, f_range)).T.reshape(-1, 2)
-        grid_df = pd.DataFrame(grid, columns=['Na:Bi', 'F:Bi'])
+        # Create mesh grid
+        na_grid, f_grid = np.meshgrid(na_range, f_range)
+        grid_points = np.c_[na_grid.ravel(), f_grid.ravel()]
+        grid_df = pd.DataFrame(grid_points, columns=['Na:Bi', 'F:Bi'])
 
-        # Apply feature engineering to grid points
+        # Apply feature engineering
         grid_df = self._add_features(grid_df)
         poly_grid = self.poly.transform(grid_df[['Na:Bi', 'F:Bi']])
         poly_grid_df = pd.DataFrame(poly_grid, columns=self.poly_feature_names).drop(columns=['Na:Bi', 'F:Bi'])
@@ -286,23 +311,11 @@ class CrystalTypeClassifier:
         # Normalize and predict
         grid_scaled = self.scaler.transform(grid_full)
         grid_pred = self.best_model.predict(grid_scaled)
+        grid_proba = self.best_model.predict_proba(grid_scaled)
 
-        predictions = copy.deepcopy(grid_pred)
-        # Reshape to 2D grid (rows = Na:Bi, columns = F:Bi)
-        prediction_grid = predictions.reshape(len(f_range), len(na_range)).T
-        grid_df = pd.DataFrame(
-            prediction_grid,
-            index=na_range,
-            columns=f_range
-        )
-        grid_df.index.name = 'Na:Bi'
-        grid_df.columns.name = 'F:Bi'
-        print(grid_df.head(5).iloc[:, :5])
-        output_path = f"{self.output_dir}/{filename.split('.')[0]}.csv"
-        # Save to CSV if requested
-        if output_path:
-            grid_df.to_csv(output_path)
-            print(f"Custom prediction grid saved to {output_path}")
+        # Reshape predictions
+        Z = grid_pred.reshape(na_grid.shape)
+
         # Define color scheme
         colors = {
             0: '#FFA500',  # Orange (Type 0)
@@ -311,56 +324,90 @@ class CrystalTypeClassifier:
         }
         cmap = mpl.colors.ListedColormap([colors[0], colors[1], colors[2]])
 
-        # Plot decision regions
-        plt.scatter(
-            grid[:, 0], grid[:, 1],
-            c=grid_pred,
-            cmap=cmap,
-            alpha=0.4,
-            s=6
+        # Create smooth contour plot
+        plt.contourf(
+            na_grid,
+            f_grid,
+            Z,
+            levels=[-0.5, 0.5, 1.5, 2.5],
+            colors=list(colors.values()),
+            alpha=0.9
         )
 
         # Plot training and test points
-        train_scatter = plt.scatter(
-            self.X_train['Na:Bi'], self.X_train['F:Bi'],
+        plt.scatter(
+            self.X_train['Na:Bi'],
+            self.X_train['F:Bi'],
             c=self.y_train,
             edgecolor='black',
             cmap=cmap,
-            s=15,
-            linewidth=0.5,
+            s=12,
+            linewidth=0.3,
             marker='o',
-            alpha=0.7,
-            label='Training Data'
+            alpha=0.9,
+            label='Training Data',
+            zorder=3
         )
 
-        test_scatter = plt.scatter(
-            self.X_test['Na:Bi'], self.X_test['F:Bi'],
+        plt.scatter(
+            self.X_test['Na:Bi'],
+            self.X_test['F:Bi'],
             c=self.y_test,
             edgecolor='black',
             cmap=cmap,
-            s=15,
-            linewidth=0.5,
+            s=12,
+            linewidth=0.3,
             marker='^',
-            alpha=0.7,
-            label='Test Data'
+            alpha=0.9,
+            label='Test Data',
+            zorder=3
         )
 
-        # Add colorbar
-        cbar = plt.colorbar(train_scatter, ticks=[0, 1, 2])
-        cbar.ax.set_yticklabels(['Others', r'NaBiF$_4$', r'BiF$_3$'])
-        #cbar.set_label('Crystal Type', fontsize=10)
+        # Create custom legend handles
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor=colors[2], label=r'BiF$_3$'),
+            Patch(facecolor=colors[1], label=r'NaBiF$_4$'),
+            Patch(facecolor=colors[0], label='Others'),
+            plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='gray', markersize=5, label='Train'),
+            plt.Line2D([0], [0], marker='^', color='w', markerfacecolor='gray', markersize=5, label='Test')
+        ]
+
+        # Add legend
+        plt.legend(
+            handles=legend_elements,
+            loc='lower left',
+            frameon=True,
+            framealpha=0.9,
+            fontsize=6,
+            handlelength=1.5,
+            borderpad=0.5,
+            handletextpad=0.5
+        )
+
         # Configure axes
         plt.xscale('log')
         plt.yscale('log')
-        plt.xlabel('Na:Bi')
-        plt.ylabel('F:Bi')
-        # Add legend and finalize
-        plt.legend(loc='lower left', frameon=True, framealpha=0.9, bbox_to_anchor=(0.01, 0.01))
-        plt.title('')
-        plt.tight_layout()
-        plt.savefig(f'{self.output_dir}/{filename}', dpi=600, bbox_inches='tight')
+        plt.xlabel('Na:Bi', fontsize=7)
+        plt.ylabel('F:Bi', fontsize=7)
+
+        # Adjust tick parameters
+        plt.tick_params(axis='both', which='major', labelsize=6, pad=2)
+        plt.tick_params(axis='both', which='minor', labelsize=5, pad=1)
+
+        # Set proper margins
+        plt.margins(0.02)
+
+        # Finalize layout
+        plt.tight_layout(pad=0.5)
+        plt.savefig(f'{self.output_dir}/{filename}', dpi=1200, bbox_inches='tight')
         plt.close()
-        print(f"Decision boundary plot saved as '{filename}'")
+        print(f"Smooth decision boundary plot saved as '{filename}'")
+
+        # Save grid data to CSV
+        grid_df['Predicted_Class'] = grid_pred
+        grid_df.to_csv(f'{self.output_dir}/decision_boundary_grid.csv', index=False)
+        print("Decision boundary grid data saved to CSV")
 
     def full_evaluation(self, model_name="Optimized"):
         """
@@ -379,7 +426,8 @@ class CrystalTypeClassifier:
             y_proba = self.best_model.predict_proba(X)
 
             # Classification report
-            report = classification_report(y, y_pred, target_names=['Others', r'NaBiF$_4$', r'BiF$_3$'], output_dict=True)
+            report = classification_report(y, y_pred, target_names=['Others', r'NaBiF$_4$', r'BiF$_3$'],
+                                           output_dict=True)
             report_df = pd.DataFrame(report).transpose()
             report_df.to_csv(f'{model_dir}/{data_type.lower()}_classification_report.csv')
 
@@ -391,7 +439,7 @@ class CrystalTypeClassifier:
             cm_df.to_csv(f'{model_dir}/{data_type.lower()}_confusion_matrix.csv')
 
             # Plot confusion matrix
-            plt.figure(figsize=(8/2.54, 6/2.54))
+            plt.figure(figsize=(8 / 2.54, 6 / 2.54))
             ax = plt.gca()
             disp = ConfusionMatrixDisplay(confusion_matrix=cm,
                                           display_labels=['Others', r'NaBiF$_4$', r'BiF$_3$'])
@@ -422,13 +470,15 @@ class CrystalTypeClassifier:
             n_classes = 3
             y_bin = label_binarize(y, classes=[0, 1, 2])
             fpr, tpr, roc_auc = {}, {}, {}
-            plt.figure(figsize=(7/2.54, 7/2.54))
+            plt.figure(figsize=(7 / 2.54, 7 / 2.54))
             colors = {
                 0: '#FFA500',  # Orange (Type 0)
                 1: '#FF4500',  # Red-orange (Type 1)
                 2: '#87CEFA'  # Light blue (Type 2)
             }
             crystals = ['Others', r'NaBiF$_4$', r'BiF$_3$']
+
+            # Compute ROC for each class
             for i, color in zip(range(n_classes), colors):
                 fpr[i], tpr[i], _ = roc_curve(y_bin[:, i], y_proba[:, i])
                 roc_auc[i] = auc(fpr[i], tpr[i])
@@ -465,7 +515,6 @@ class CrystalTypeClassifier:
         joblib.dump(self.best_model, f'{self.output_dir}/optimized_model.pkl')
         joblib.dump(self.scaler, f'{self.output_dir}/scaler.pkl')
         joblib.dump(self.poly, f'{self.output_dir}/poly_transformer.pkl')
-        print("Model artifacts saved")
 
 
 # Main execution
@@ -475,7 +524,7 @@ if __name__ == "__main__":
     # Initialize classifier
     classifier = CrystalTypeClassifier(
         data_path='data_20.csv',
-        output_dir="random_forest_gridsearch",
+        output_dir="data_20",
         random_state=42
     )
 
@@ -485,7 +534,7 @@ if __name__ == "__main__":
     classifier.train_model()
     classifier.evaluate_model()
     classifier.plot_feature_importance()
-    classifier.plot_decision_boundary("decision_boundary_optimized.png")
+    classifier.plot_decision_boundary("decision_boundary.png")
     classifier.full_evaluation()
     classifier.save_model()
 
