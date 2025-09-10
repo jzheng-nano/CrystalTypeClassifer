@@ -26,40 +26,10 @@ class CrystalTypeGridPredictor:
         self._load_artifacts()
 
     def _load_artifacts(self):
-        """Load trained model, scaler, and feature transformers."""
+        """Load trained model and scaler (no feature engineering artifacts)."""
         self.model = joblib.load(os.path.join(self.model_dir, 'optimized_model.pkl'))
         self.scaler = joblib.load(os.path.join(self.model_dir, 'scaler.pkl'))
-        self.poly_transformer = joblib.load(os.path.join(self.model_dir, 'poly_transformer.pkl'))
-        print("Successfully loaded prediction artifacts")
-
-    def _add_features(self, df):
-        """
-        Replicate feature engineering from training pipeline.
-
-        Args:
-            df (pd.DataFrame): Input data with 'Na:Bi' and 'F:Bi' columns
-        """
-        df = df.copy()
-        df['Na:Bi/F:Bi'] = df['Na:Bi'] / (df['F:Bi'] + 1e-6)
-        df['Na:Bi+F:Bi'] = df['Na:Bi'] + df['F:Bi']
-        df['Na:Bi-F:Bi'] = df['Na:Bi'] - df['F:Bi']
-        df['GeometricMean'] = np.sqrt(df['Na:Bi'] * df['F:Bi'])
-        return df
-
-    def _transform_features(self, input_df):
-        """
-        Apply full feature engineering pipeline to new data.
-        """
-        # Add basic features
-        df = self._add_features(input_df)
-
-        # Generate polynomial features
-        poly_features = self.poly_transformer.transform(df[['Na:Bi', 'F:Bi']])
-        poly_feature_names = self.poly_transformer.get_feature_names_out(['Na:Bi', 'F:Bi'])
-        poly_df = pd.DataFrame(poly_features, columns=poly_feature_names).drop(columns=['Na:Bi', 'F:Bi'])
-
-        # Combine features
-        return pd.concat([df, poly_df], axis=1)
+        print("Successfully loaded prediction artifacts (no feature engineering)")
 
     def generate_custom_grid(self, na_list, f_list, output_path=None):
         """
@@ -77,14 +47,11 @@ class CrystalTypeGridPredictor:
         na_values, f_values = np.meshgrid(na_list, f_list)
         grid_points = np.vstack([na_values.ravel(), f_values.ravel()]).T
 
-        # Create DataFrame
+        # Create DataFrame with only the two original features
         input_df = pd.DataFrame(grid_points, columns=['Na:Bi', 'F:Bi'])
 
-        # Apply feature engineering
-        engineered_data = self._transform_features(input_df)
-
-        # Apply normalization
-        scaled_data = self.scaler.transform(engineered_data)
+        # Apply normalization (no feature engineering)
+        scaled_data = self.scaler.transform(input_df)
 
         # Make predictions
         predictions = self.model.predict(scaled_data)

@@ -5,8 +5,9 @@ import seaborn as sns
 from sklearn.model_selection import train_test_split, GridSearchCV, cross_val_score
 from sklearn.metrics import (confusion_matrix, classification_report,
                              f1_score, precision_score, recall_score, accuracy_score,
-                             roc_auc_score, ConfusionMatrixDisplay, roc_curve, auc)
-from sklearn.preprocessing import label_binarize, StandardScaler, PolynomialFeatures
+                             roc_auc_score, ConfusionMatrixDisplay, roc_curve, auc,
+                             precision_recall_curve, average_precision_score)
+from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 import os
 import warnings
@@ -17,10 +18,9 @@ import matplotlib as mpl
 import copy
 from scipy import interp
 
-
 class CrystalTypeClassifier:
     """
-    A machine learning pipeline for classifying crystal types based on chemical ratios.
+    A machine learning pipeline for binary classification of crystal types based on chemical ratios.
 
     Attributes:
         output_dir (str): Directory to save all outputs
@@ -29,7 +29,6 @@ class CrystalTypeClassifier:
         X_train, X_test, y_train, y_test: Split datasets
         best_model: Optimized RandomForest classifier
         scaler: Fitted StandardScaler
-        poly: Fitted PolynomialFeatures transformer
     """
 
     def __init__(self, data_path='data_20.csv', output_dir="data_20", random_state=42):
@@ -67,7 +66,7 @@ class CrystalTypeClassifier:
     def _prepare_data(self):
         """Load and split data into training and testing sets."""
         print("Using features: 'Na:Bi' (Sodium-to-Bismuth ratio), 'F:Bi' (Fluorine-to-Bismuth ratio)")
-        print("Predicting target: 'Crystal_Type' (0=Others, 1=NaBiF4, 2=BiF3)")
+        print("Predicting target: 'Crystal_Type' (0=NaBiF4, 1=Others)")
 
         X = self.data[['Na:Bi', 'F:Bi']]
         y = self.data['Crystal_Type']
@@ -85,65 +84,19 @@ class CrystalTypeClassifier:
 
         print(f"Train size: {len(self.X_train)}, Test size: {len(self.X_test)}")
 
-    def _add_features(self, df):
+    def perform_feature_engineering(self):
         """
-        Engineer new features from base chemical ratios.
-
-        Args:
-            df (pd.DataFrame): Input dataframe with 'Na:Bi' and 'F:Bi' columns
-
-        Returns:
-            pd.DataFrame: Dataframe with additional engineered features
+        Placeholder method for feature engineering - no feature engineering is performed.
+        This method is kept for compatibility with the original code structure.
         """
-        df = df.copy()
-        df['Na:Bi/F:Bi'] = df['Na:Bi'] / (df['F:Bi'] + 1e-6)  # Avoid division by zero
-        df['Na:Bi+F:Bi'] = df['Na:Bi'] + df['F:Bi']
-        df['Na:Bi-F:Bi'] = df['Na:Bi'] - df['F:Bi']
-        df['GeometricMean'] = np.sqrt(df['Na:Bi'] * df['F:Bi'])
-        #df['sqrt_Na:Bi'] = np.sqrt(df['Na:Bi'])
-        #df['sqrt_F:Bi'] = np.sqrt(df['F:Bi'])
-        return df
+        print("\nSkipping feature engineering - using original features only")
+        print("Using only 'Na:Bi' and 'F:Bi' features")
 
-    def perform_feature_engineering(self, poly_degree=3):
-        """
-        Perform feature engineering including polynomial feature expansion.
-
-        Args:
-            poly_degree (int): Degree for polynomial feature expansion
-        """
-        print("\nPerforming feature engineering...")
-        print(f"Adding polynomial features (degree={poly_degree})")
-
-        # Add basic engineered features
-        self.X_train = self._add_features(self.X_train)
-        self.X_test = self._add_features(self.X_test)
-
-        # Create polynomial features (fit only on training data)
-        self.poly = PolynomialFeatures(
-            degree=poly_degree,
-            include_bias=False,
-            interaction_only=False
-        )
-        self.poly.fit(self.X_train[['Na:Bi', 'F:Bi']])
-
-        # Transform both datasets
-        poly_train = self.poly.transform(self.X_train[['Na:Bi', 'F:Bi']])
-        poly_test = self.poly.transform(self.X_test[['Na:Bi', 'F:Bi']])
-        self.poly_feature_names = self.poly.get_feature_names_out(['Na:Bi', 'F:Bi'])
-
-        # Create DataFrames and drop base columns to avoid duplication
-        poly_train_df = pd.DataFrame(poly_train, columns=self.poly_feature_names).drop(columns=['Na:Bi', 'F:Bi'])
-        poly_test_df = pd.DataFrame(poly_test, columns=self.poly_feature_names).drop(columns=['Na:Bi', 'F:Bi'])
-
-        # Combine features
-        self.X_train = pd.concat([self.X_train, poly_train_df], axis=1)
-        self.X_test = pd.concat([self.X_test, poly_test_df], axis=1)
-
-        # Save engineered dataset
-        engineered_data = pd.concat([self.X_train, self.X_test])
-        engineered_data['Crystal_Type'] = pd.concat([self.y_train, self.y_test]).values
-        engineered_data.to_csv(f'{self.output_dir}/feature_engineered_data.csv', index=False)
-        print(f"Feature engineering complete. Original features: 2, New features: {self.X_train.shape[1]}")
+        # Save dataset without feature engineering
+        original_data = pd.concat([self.X_train, self.X_test])
+        original_data['Crystal_Type'] = pd.concat([self.y_train, self.y_test]).values
+        original_data.to_csv(f'{self.output_dir}/original_data.csv', index=False)
+        print("Using original 2 features without any engineering")
 
     def normalize_data(self):
         """Normalize features using StandardScaler (fit only on training data)."""
@@ -189,7 +142,7 @@ class CrystalTypeClassifier:
             estimator=RandomForestClassifier(random_state=self.RANDOM_STATE),
             param_grid=param_grid,
             cv=cv,
-            scoring='f1_weighted',
+            scoring='f1',  # Changed to binary F1 score
             n_jobs=8,  # Use all available cores
             verbose=1
         )
@@ -199,7 +152,7 @@ class CrystalTypeClassifier:
         optimization_time = time.time() - start_time
 
         print(f"GridSearchCV completed in {optimization_time:.2f} seconds!")
-        print(f"Best F1 weighted score: {grid_search.best_score_:.4f}")
+        print(f"Best F1 score: {grid_search.best_score_:.4f}")
 
         # Save results
         cv_results = pd.DataFrame(grid_search.cv_results_)
@@ -231,26 +184,27 @@ class CrystalTypeClassifier:
             y_proba = self.best_model.predict_proba(X)
 
             prefix = f"{set_name} " if set_name else ""
+
+            # Binary classification metrics for each class
             results[f"{prefix}{data_type} Accuracy"] = accuracy_score(y, y_pred)
+            results[f"{prefix}{data_type} Precision (NaBiF4)"] = precision_score(y, y_pred, pos_label=0)
+            results[f"{prefix}{data_type} Recall (NaBiF4)"] = recall_score(y, y_pred, pos_label=0)
+            results[f"{prefix}{data_type} F1 (NaBiF4)"] = f1_score(y, y_pred, pos_label=0)
+            results[f"{prefix}{data_type} Precision (Others)"] = precision_score(y, y_pred, pos_label=1)
+            results[f"{prefix}{data_type} Recall (Others)"] = recall_score(y, y_pred, pos_label=1)
+            results[f"{prefix}{data_type} F1 (Others)"] = f1_score(y, y_pred, pos_label=1)
+            results[f"{prefix}{data_type} Precision (Macro)"] = precision_score(y, y_pred, average='macro')
+            results[f"{prefix}{data_type} Recall (Macro)"] = recall_score(y, y_pred, average='macro')
+            results[f"{prefix}{data_type} F1 (Macro)"] = f1_score(y, y_pred, average='macro')
             results[f"{prefix}{data_type} Precision (Weighted)"] = precision_score(y, y_pred, average='weighted')
             results[f"{prefix}{data_type} Recall (Weighted)"] = recall_score(y, y_pred, average='weighted')
-            results[f"{prefix}{data_type} F1 Macro"] = f1_score(y, y_pred, average='macro')
-            results[f"{prefix}{data_type} F1 Weighted"] = f1_score(y, y_pred, average='weighted')
+            results[f"{prefix}{data_type} F1 (Weighted)"] = f1_score(y, y_pred, average='weighted')
 
-            # Class-specific metrics
-            for class_id in [0, 1, 2]:
-                class_name = ['Others', 'NaBiF4', 'BiF3'][class_id]
-                results[f"{prefix}{data_type} Precision ({class_name})"] = precision_score(
-                    y, y_pred, labels=[class_id], average=None)[0]
-                results[f"{prefix}{data_type} Recall ({class_name})"] = recall_score(
-                    y, y_pred, labels=[class_id], average=None)[0]
-                results[f"{prefix}{data_type} F1 ({class_name})"] = f1_score(
-                    y, y_pred, labels=[class_id], average=None)[0]
+            # Binary ROC AUC
+            results[f"{prefix}{data_type} ROC AUC"] = roc_auc_score(y, y_proba[:, 1])
 
-            if len(np.unique(y)) > 1:
-                results[f"{prefix}{data_type} ROC AUC"] = roc_auc_score(
-                    y, y_proba, multi_class='ovo', average='macro'
-                )
+            # Average precision score (better for imbalanced datasets)
+            results[f"{prefix}{data_type} Average Precision"] = average_precision_score(y, y_proba[:, 1])
 
         print("\nOptimized Model Performance:")
         for metric, value in results.items():
@@ -302,34 +256,27 @@ class CrystalTypeClassifier:
         grid_points = np.c_[na_grid.ravel(), f_grid.ravel()]
         grid_df = pd.DataFrame(grid_points, columns=['Na:Bi', 'F:Bi'])
 
-        # Apply feature engineering
-        grid_df = self._add_features(grid_df)
-        poly_grid = self.poly.transform(grid_df[['Na:Bi', 'F:Bi']])
-        poly_grid_df = pd.DataFrame(poly_grid, columns=self.poly_feature_names).drop(columns=['Na:Bi', 'F:Bi'])
-        grid_full = pd.concat([grid_df, poly_grid_df], axis=1)
-
         # Normalize and predict
-        grid_scaled = self.scaler.transform(grid_full)
+        grid_scaled = self.scaler.transform(grid_df)
         grid_pred = self.best_model.predict(grid_scaled)
         grid_proba = self.best_model.predict_proba(grid_scaled)
 
         # Reshape predictions
         Z = grid_pred.reshape(na_grid.shape)
 
-        # Define color scheme
+        # Define color scheme for binary classification
         colors = {
-            0: '#FFA500',  # Orange (Type 0)
-            1: '#FF4500',  # Red-orange (Type 1)
-            2: '#87CEFA'  # Light blue (Type 2)
+            0: '#FF4500',  # Red-orange (NaBiF4)
+            1: '#87CEFA'  # Light blue (Others)
         }
-        cmap = mpl.colors.ListedColormap([colors[0], colors[1], colors[2]])
+        cmap = mpl.colors.ListedColormap([colors[0], colors[1]])
 
         # Create smooth contour plot
         plt.contourf(
             na_grid,
             f_grid,
             Z,
-            levels=[-0.5, 0.5, 1.5, 2.5],
+            levels=[-0.5, 0.5, 1.5],
             colors=list(colors.values()),
             alpha=0.9
         )
@@ -366,9 +313,8 @@ class CrystalTypeClassifier:
         # Create custom legend handles
         from matplotlib.patches import Patch
         legend_elements = [
-            Patch(facecolor=colors[2], label=r'BiF$_3$'),
-            Patch(facecolor=colors[1], label=r'NaBiF$_4$'),
-            Patch(facecolor=colors[0], label='Others'),
+            Patch(facecolor=colors[0], label=r'NaBiF$_4$'),
+            Patch(facecolor=colors[1], label='Others'),
             plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='gray', markersize=5, label='Train'),
             plt.Line2D([0], [0], marker='^', color='w', markerfacecolor='gray', markersize=5, label='Test')
         ]
@@ -406,6 +352,8 @@ class CrystalTypeClassifier:
 
         # Save grid data to CSV
         grid_df['Predicted_Class'] = grid_pred
+        grid_df['Probability_NaBiF4'] = grid_proba[:, 0]
+        grid_df['Probability_Others'] = grid_proba[:, 1]
         grid_df.to_csv(f'{self.output_dir}/decision_boundary_grid.csv', index=False)
         print("Decision boundary grid data saved to CSV")
 
@@ -426,23 +374,32 @@ class CrystalTypeClassifier:
             y_proba = self.best_model.predict_proba(X)
 
             # Classification report
-            report = classification_report(y, y_pred, target_names=['Others', r'NaBiF$_4$', r'BiF$_3$'],
+            report = classification_report(y, y_pred, target_names=['NaBiF4', 'Others'],
                                            output_dict=True)
             report_df = pd.DataFrame(report).transpose()
             report_df.to_csv(f'{model_dir}/{data_type.lower()}_classification_report.csv')
 
+            # 提取macro和weighted平均指标
+            macro_precision = report['macro avg']['precision']
+            macro_recall = report['macro avg']['recall']
+            macro_f1 = report['macro avg']['f1-score']
+
+            weighted_precision = report['weighted avg']['precision']
+            weighted_recall = report['weighted avg']['recall']
+            weighted_f1 = report['weighted avg']['f1-score']
+
             # Confusion matrix
             cm = confusion_matrix(y, y_pred)
             cm_df = pd.DataFrame(cm,
-                                 index=['Others', r'NaBiF$_4$', r'BiF$_3$'],
-                                 columns=['Others', r'NaBiF$_4$', r'BiF$_3$'])
+                                 index=['NaBiF4', 'Others'],
+                                 columns=['NaBiF4', 'Others'])
             cm_df.to_csv(f'{model_dir}/{data_type.lower()}_confusion_matrix.csv')
 
             # Plot confusion matrix
             plt.figure(figsize=(8 / 2.54, 6 / 2.54))
             ax = plt.gca()
             disp = ConfusionMatrixDisplay(confusion_matrix=cm,
-                                          display_labels=['Others', r'NaBiF$_4$', r'BiF$_3$'])
+                                          display_labels=['NaBiF4', 'Others'])
             disp.plot(ax=ax,
                       cmap='Blues',
                       values_format='d',
@@ -460,30 +417,30 @@ class CrystalTypeClassifier:
 
             # Calculate metrics
             results[f"{data_type} Accuracy"] = accuracy_score(y, y_pred)
-            results[f"{data_type} Precision (Weighted)"] = precision_score(y, y_pred, average='weighted')
-            results[f"{data_type} Recall (Weighted)"] = recall_score(y, y_pred, average='weighted')
-            results[f"{data_type} F1 Macro"] = f1_score(y, y_pred, average='macro')
-            results[f"{data_type} F1 Weighted"] = f1_score(y, y_pred, average='weighted')
-            results[f"{data_type} ROC AUC"] = roc_auc_score(y, y_proba, multi_class='ovo', average='macro')
+            results[f"{data_type} Precision (NaBiF4)"] = precision_score(y, y_pred, pos_label=0)
+            results[f"{data_type} Recall (NaBiF4)"] = recall_score(y, y_pred, pos_label=0)
+            results[f"{data_type} F1 (NaBiF4)"] = f1_score(y, y_pred, pos_label=0)
+            results[f"{data_type} Precision (Others)"] = precision_score(y, y_pred, pos_label=1)
+            results[f"{data_type} Recall (Others)"] = recall_score(y, y_pred, pos_label=1)
+            results[f"{data_type} F1 (Others)"] = f1_score(y, y_pred, pos_label=1)
+            results[f"{data_type} Precision (Macro)"] = macro_precision
+            results[f"{data_type} Recall (Macro)"] = macro_recall
+            results[f"{data_type} F1 (Macro)"] = macro_f1
+            results[f"{data_type} Precision (Weighted)"] = weighted_precision
+            results[f"{data_type} Recall (Weighted)"] = weighted_recall
+            results[f"{data_type} F1 (Weighted)"] = weighted_f1
 
-            # ROC curves
-            n_classes = 3
-            y_bin = label_binarize(y, classes=[0, 1, 2])
-            fpr, tpr, roc_auc = {}, {}, {}
+            results[f"{data_type} ROC AUC"] = roc_auc_score(y, y_proba[:, 1])
+            results[f"{data_type} Average Precision"] = average_precision_score(y, y_proba[:, 1])
+
+            # ROC curve for binary classification
             plt.figure(figsize=(7 / 2.54, 7 / 2.54))
-            colors = {
-                0: '#FFA500',  # Orange (Type 0)
-                1: '#FF4500',  # Red-orange (Type 1)
-                2: '#87CEFA'  # Light blue (Type 2)
-            }
-            crystals = ['Others', r'NaBiF$_4$', r'BiF$_3$']
 
-            # Compute ROC for each class
-            for i, color in zip(range(n_classes), colors):
-                fpr[i], tpr[i], _ = roc_curve(y_bin[:, i], y_proba[:, i])
-                roc_auc[i] = auc(fpr[i], tpr[i])
-                plt.plot(fpr[i], tpr[i], color=colors[i], lw=2,
-                         label=f'{crystals[i]} (AUC = {roc_auc[i]:.2f})')
+            fpr, tpr, _ = roc_curve(y, y_proba[:, 1])
+            roc_auc = auc(fpr, tpr)
+
+            plt.plot(fpr, tpr, color='#FF4500', lw=2,
+                     label=f'ROC curve (AUC = {roc_auc:.2f})')
 
             plt.plot([0, 1], [0, 1], 'k--', lw=2)
             plt.xlim([0.0, 1.0])
@@ -493,15 +450,33 @@ class CrystalTypeClassifier:
             plt.title('')
             plt.legend(loc="lower right")
             plt.tight_layout()
-            plt.savefig(f'{model_dir}/{data_type.lower()}_roc_curves.png', dpi=600, bbox_inches='tight')
+            plt.savefig(f'{model_dir}/{data_type.lower()}_roc_curve.png', dpi=600, bbox_inches='tight')
             plt.close()
 
-            # Save ROC data
-            roc_data = []
-            for i in range(n_classes):
-                for fp, tp in zip(fpr[i], tpr[i]):
-                    roc_data.append({'Class': i, 'FPR': fp, 'TPR': tp, 'AUC': roc_auc[i]})
-            pd.DataFrame(roc_data).to_csv(f'{model_dir}/{data_type.lower()}_roc_curve_data.csv', index=False)
+            # Precision-Recall curve
+            plt.figure(figsize=(7 / 2.54, 7 / 2.54))
+            precision, recall, _ = precision_recall_curve(y, y_proba[:, 1])
+            avg_precision = average_precision_score(y, y_proba[:, 1])
+
+            plt.plot(recall, precision, color='#FF4500', lw=2,
+                     label=f'Precision-Recall curve (AP = {avg_precision:.2f})')
+
+            plt.xlabel('Recall')
+            plt.ylabel('Precision')
+            plt.ylim([0.0, 1.05])
+            plt.xlim([0.0, 1.0])
+            plt.title('')
+            plt.legend(loc="lower left")
+            plt.tight_layout()
+            plt.savefig(f'{model_dir}/{data_type.lower()}_precision_recall_curve.png', dpi=600, bbox_inches='tight')
+            plt.close()
+
+            # Save ROC and PR curve data
+            roc_data = pd.DataFrame({'FPR': fpr, 'TPR': tpr, 'AUC': roc_auc})
+            roc_data.to_csv(f'{model_dir}/{data_type.lower()}_roc_curve_data.csv', index=False)
+
+            pr_data = pd.DataFrame({'Recall': recall, 'Precision': precision, 'AP': avg_precision})
+            pr_data.to_csv(f'{model_dir}/{data_type.lower()}_precision_recall_data.csv', index=False)
 
         # Save all metrics
         pd.DataFrame.from_dict(results, orient='index', columns=['Value']).to_csv(
@@ -514,7 +489,6 @@ class CrystalTypeClassifier:
         """Save trained model and preprocessing objects."""
         joblib.dump(self.best_model, f'{self.output_dir}/optimized_model.pkl')
         joblib.dump(self.scaler, f'{self.output_dir}/scaler.pkl')
-        joblib.dump(self.poly, f'{self.output_dir}/poly_transformer.pkl')
 
 
 # Main execution
@@ -528,8 +502,8 @@ if __name__ == "__main__":
         random_state=42
     )
 
-    # Execute pipeline
-    classifier.perform_feature_engineering(poly_degree=3)
+    # Execute pipeline (without feature engineering)
+    classifier.perform_feature_engineering()  # This now does nothing
     classifier.normalize_data()
     classifier.train_model()
     classifier.evaluate_model()
