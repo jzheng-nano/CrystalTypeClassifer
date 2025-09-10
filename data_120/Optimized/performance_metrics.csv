@@ -1,13 +1,31 @@
 ,Value
 Train Accuracy,1.0
+Train Precision (NaBiF4),1.0
+Train Recall (NaBiF4),1.0
+Train F1 (NaBiF4),1.0
+Train Precision (Others),1.0
+Train Recall (Others),1.0
+Train F1 (Others),1.0
+Train Precision (Macro),1.0
+Train Recall (Macro),1.0
+Train F1 (Macro),1.0
 Train Precision (Weighted),1.0
 Train Recall (Weighted),1.0
-Train F1 Macro,1.0
-Train F1 Weighted,1.0
-Train ROC AUC,0.999630450849963
-Test Accuracy,0.8571428571428571
-Test Precision (Weighted),0.8571428571428571
-Test Recall (Weighted),0.8571428571428571
-Test F1 Macro,0.8555555555555555
-Test F1 Weighted,0.8571428571428571
-Test ROC AUC,0.9333333333333332
+Train F1 (Weighted),1.0
+Train ROC AUC,1.0
+Train Average Precision,1.0
+Test Accuracy,0.9333333333333333
+Test Precision (NaBiF4),0.9230769230769231
+Test Recall (NaBiF4),1.0
+Test F1 (NaBiF4),0.9600000000000001
+Test Precision (Others),1.0
+Test Recall (Others),0.6666666666666666
+Test F1 (Others),0.8
+Test Precision (Macro),0.9615384615384616
+Test Recall (Macro),0.8333333333333333
+Test F1 (Macro),0.8800000000000001
+Test Precision (Weighted),0.9384615384615385
+Test Recall (Weighted),0.9333333333333333
+Test F1 (Weighted),0.9280000000000002
+Test ROC AUC,0.9444444444444445
+Test Average Precision,0.8666666666666667
